@@ -20,7 +20,7 @@ flowchart TD
         Entry["call_api(prompt, options, context)\n• Extracts W3C traceparent"]
         IsoManager["WorkspaceIsolation (isolation.py)\n• git-worktree / copy / in-place / btrfs\n• Ephemeral workdir provisioning & teardown"]
         StreamRunner["Live Subprocess & Stream Interceptor\n(Fast I/O with orjson / ujson fallback)"]
-        CmdParser["Deterministic Command Parser (command_parser.py)\n• GNU bashlex AST + shlex fallback\n• has_signature / has_binary boolean maps"]
+        CmdParser["Deterministic Command Parser (command_parser.py)\n• GNU bashlex AST + shlex fallback\n• has_binary / has_word / has_flag boolean maps"]
         DeltaAssembler["Streaming Delta Assembler\n• Collapses text_delta / thinking_delta\n• Builds cohesive turn structures\n• 90-95% trace payload compression"]
         OTelExporter["OpenTelemetry Tracer & OTLP Exporter\n(Exports live protobuf spans to port 4318)"]
         Guard["Execution Guards\n(stop_on_tool_failure, max_steps, timeout)"]
@@ -157,7 +157,14 @@ To enable zero-code trajectory assertions in YAML, `pi_provider.py` integrates n
         "attributes": {
           "tool.name": "bash",
           "command": "meson compile -C build",
-          "tool.args": { "command": "meson compile -C build" },
+          "tool.args": {
+            "command": "meson compile -C build",
+            "binaries": ["meson"],
+            "words": ["compile", "build"],
+            "has_binary": { "meson": true },
+            "has_word": { "compile": true, "build": true },
+            "has_flag": { "-C": true }
+          },
           "tool.is_error": false,
           "gen_ai.turn.index": 0
         },
@@ -179,6 +186,8 @@ To enable zero-code trajectory assertions in YAML, `pi_provider.py` integrates n
 }
 ```
 
+`tool.args` is shown as decoded JSON above for readability; the live OpenTelemetry attribute contains the same enriched object serialized as a JSON string.
+
 ### 4.2 Skill Detection Rules & Schema
 
 Promptfoo's native `skill-used` assertion validates skills by matching against `metadata.skillCalls`:
@@ -196,8 +205,7 @@ Because Promptfoo's native `trajectory:tool-args-match` uses strict equality (`u
 1. **Compound Command & Pipeline Normalization:** Chained commands (`cd build && meson test -C build -v || exit 1`) and stream redirections (`> /dev/null`, `2>&1`) are decomposed into structured `commands` objects.
 2. **Boolean Dictionary Maps for Promptfoo:** To support Promptfoo's partial-matching mode on dynamic tool calls, every `bash` tool call args object is enriched with:
    - `has_binary: { "<binary>": true }` (e.g. `meson: true`, `cd: true`)
-   - `has_subcommand: { "<subcommand>": true }` (e.g. `test: true`, `setup: true`)
-   - `has_signature: { "<signature>": true }` (e.g. `"meson test": true`, `"git commit": true`)
+   - `has_word: { "<word>": true }` for every non-flag word after a binary (e.g. `test: true`, `setup: true`)
    - `has_flag: { "<flag>": true }` (e.g. `"-C": true`, `"-v": true`)
 3. **Writing Resilient Trajectory Assertions:**
    ```yaml
@@ -206,10 +214,36 @@ Because Promptfoo's native `trajectory:tool-args-match` uses strict equality (`u
        value:
          name: "bash"
          args:
-           has_signature:
-             "meson test": true
+           has_binary:
+             meson: true
+           has_word:
+             test: true
    ```
-   This passes 100% deterministically regardless of whether the agent ran `meson test`, `cd build && meson test -v`, or `meson setup build && ninja && meson test`.
+   This intentionally favors false positives over false negatives: binary and word maps are aggregated across a chained command, so they do not imply that both tokens belong to the same atomic command.
+
+   The parser does not infer CLI option schemas. With `--timeout 10`, `has_flag` contains `--timeout` and `has_word` contains `10`. With `--timeout=10`, `has_flag` contains both `--timeout=10` and the normalized name `--timeout`. Short aliases cannot be inferred: if a CLI also accepts `-t`, assertions that care about either spelling must check both `--timeout` and `-t` as acceptable forms.
+
+#### Flag alternatives (OR)
+
+   Multiple keys inside an expected `has_flag` object use AND semantics because `trajectory:tool-args-match` recursively matches the expected object. Promptfoo does not provide nested `anyOf` semantics there. Use a JavaScript assertion when any accepted flag should pass:
+   ```yaml
+   - type: javascript
+     value: |
+       const acceptedFlags = ['-C', '--Chat'];
+
+       return context.metadata.toolCalls.some(
+         ({ tool, args }) =>
+           tool === 'bash' &&
+           acceptedFlags.some(flag => args?.has_flag?.[flag] === true)
+       );
+   ```
+   The provider cannot precompute arbitrary flag groups because the accepted alternatives are defined by each test. See Promptfoo's [trajectory argument matching reference](https://www.promptfoo.dev/docs/configuration/expected-outputs/deterministic/#trajectorytool-args-match).
+
+4. **Parser Overview CLI:** During assertion development, print the complete parser view by passing the command as one quoted argument:
+   ```bash
+   tests/command_parser_overview.py './cli.py analyze --timeout=10 "Something" && echo done'
+   ```
+   Use `--engine bashlex` or `--engine shlex` to force an engine. The JSON output includes the atomic `commands` list and the aggregate `has_binary`, `has_word`, and `has_flag` maps injected by `pi_provider.py`.
 
 ---
 

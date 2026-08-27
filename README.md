@@ -57,10 +57,14 @@ npx promptfoo view
 ├── eval_judge.py          # Universal Agent-as-a-Judge provider for semantic rubrics
 ├── isolation.py           # Test-to-test workspace isolation (worktree, copy, in-place, btrfs)
 ├── tests/                 # Unit & lifecycle tests (isolation, command parser, diff capture)
+│   ├── command_parser_overview.py  # Print parser JSON for a quoted shell command
+│   ├── fixtures/
+│   │   └── cli.py         # Schema-aware CLI used by parser comparison tests
 │   ├── test_command_parser.py
 │   └── test_isolation.py
 ├── uv_python.sh           # Portable uv execution wrapper for zero-config environments
-├── pyproject.toml         # Dependencies (opentelemetry-sdk, otlp exporter, orjson)
+├── pyproject.toml         # Python dependencies and pytest development extra
+├── uv.lock                # Reproducible Python dependency lockfile
 └── package.json           # Node project scripts & dependencies
 ```
 
@@ -69,22 +73,26 @@ npx promptfoo view
 ## Test Configuration (`promptfooconfig.yaml`)
 
 ```yaml
-description: "Pi Agent Evaluation Suite"
+description: "Pi Coding Agent Evaluation Suite"
 
 providers:
   - id: "file://pi_provider.py"
     label: "pi-agent"
     config:
-      # Optional default provider options
       timeout_seconds: 120
+
+defaultTest:
+  assert:
+    - type: javascript
+      value: "context.metadata.exitCode === 0"
 
 tests:
   # --------------------------------------------------------------------------
   # 1. Verify Skill Activation
   # --------------------------------------------------------------------------
-  - description: "Verify 'uv' skill is read and used"
+  - description: "Verify 'uv' skill is read when managing python packages"
     vars:
-      prompt: "Use the uv skill to sync project dependencies and run tests"
+      prompt: "Use the uv skill to inspect available dependencies"
     assert:
       - type: skill-used
         value: "uv"
@@ -92,9 +100,9 @@ tests:
   # --------------------------------------------------------------------------
   # 2. Verify Tool Usage and Specific CLI Command Execution
   # --------------------------------------------------------------------------
-  - description: "Verify pytest CLI is executed via bash tool"
+  - description: "Verify pytest is invoked through bash tool"
     vars:
-      prompt: "Run tests in tests/test_core.py"
+      prompt: "Run the test suite using pytest"
     assert:
       - type: trajectory:tool-used
         value: "bash"
@@ -102,62 +110,51 @@ tests:
         value:
           name: "bash"
           args:
-            command: "*pytest tests/test_core.py*"
+            has_binary:
+              pytest: true
 
   # --------------------------------------------------------------------------
   # 3. Verify Chronological Tool Sequence
   # --------------------------------------------------------------------------
-  - description: "Verify sequence: read file -> edit file -> run bash"
+  - description: "Verify file is read before edit is performed"
     vars:
-      prompt: "Fix typo in config.py and verify with pytest"
+      prompt: "Find and fix the typo in config.py"
     assert:
       - type: trajectory:tool-sequence
         value:
           steps:
             - read
             - edit
-            - bash
-
-  # --------------------------------------------------------------------------
-  # 3. Deterministic Shell Command Matching (has_signature / has_binary)
-  # --------------------------------------------------------------------------
-  - description: "Match command execution regardless of chaining or flags"
-    vars:
-      prompt: "Run project tests with meson test"
-    assert:
-      - type: trajectory:tool-args-match
-        value:
-          name: "bash"
-          args:
-            has_signature:
-              "meson test": true
-
-  # --------------------------------------------------------------------------
-  # 4. Ordered Tool Sequence Verification
-  # --------------------------------------------------------------------------
-  - description: "Verify ordered tool sequence: clean -> compile"
-    vars:
-      prompt: "Execute in two steps: meson compile --clean then meson compile"
-    assert:
-      - type: trajectory:tool-sequence
-        value:
-          steps:
-            - bash
-            - bash
-      - type: icontains
-        value: "clean"
 
   # --------------------------------------------------------------------------
   # 4. Stop on Tool Failure Guard Condition
   # --------------------------------------------------------------------------
-  - description: "Strict mode: test fails if any tool error occurs"
+  - description: "Verify run executes with zero tool failures"
     vars:
-      prompt: "Format all python files with ruff format"
+      prompt: "List the files in the directory"
       stop_on_tool_failure: true
     assert:
       - type: trace-error-spans
         value: 0
+      - type: javascript
+        value: "context.metadata.stoppedEarly === false"
 ```
+
+---
+
+## Inspecting Parsed Commands
+
+Use the overview script to see the exact JSON that backs command assertions. Pass the complete shell command as one quoted argument:
+
+```bash
+tests/command_parser_overview.py './cli.py analyze --timeout=10 "Something" && echo done'
+```
+
+Use `--engine bashlex` or `--engine shlex` to force an engine while comparing parser behavior.
+
+The parser does not infer option schemas or short/long aliases. Both `--timeout=10` and `--timeout 10` set `has_flag["--timeout"]`; only the separated form also records `10` in `has_word`. A short form such as `-t` is recorded exactly as `has_flag["-t"]` and must be allowed separately by assertions.
+
+Multiple `has_flag` keys use AND semantics. To accept any flag from a list, use the JavaScript assertion described under [Flag alternatives (OR)](ARCHITECTURE.md#flag-alternatives-or).
 
 ---
 

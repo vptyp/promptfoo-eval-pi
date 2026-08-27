@@ -21,47 +21,6 @@ except ImportError:
     BASHLEX_AVAILABLE = False
 
 
-# Common CLI tools with prominent subcommands (multi-verb interfaces)
-KNOWN_SUBCOMMAND_BINARIES: Set[str] = {
-    "git",
-    "meson",
-    "ninja",
-    "cargo",
-    "docker",
-    "docker-compose",
-    "podman",
-    "kubectl",
-    "npm",
-    "npx",
-    "yarn",
-    "pnpm",
-    "pip",
-    "pip3",
-    "poetry",
-    "uv",
-    "pytest",
-    "apt",
-    "apt-get",
-    "systemctl",
-    "journalctl",
-    "ip",
-    "aws",
-    "gcloud",
-    "az",
-    "agy",
-    "claude",
-    "pi",
-    "openclaw",
-    "python",
-    "python3",
-    "go",
-    "rustup",
-    "composer",
-    "bundle",
-    "mvn",
-    "gradle",
-}
-
 # Command wrappers that precede the real target executable
 COMMAND_WRAPPERS: Set[str] = {
     "sudo",
@@ -79,34 +38,75 @@ COMMAND_WRAPPERS: Set[str] = {
     "gdb",
 }
 
-# Common flags known to take a parameter (flag value) across standard CLI tools
-PARAMETERIZED_FLAGS: Set[str] = {
-    "-C",
-    "-m",
-    "-f",
-    "-o",
-    "-c",
-    "-j",
-    "-p",
-    "-t",
-    "-i",
-    "-e",
-    "-u",
-    "-n",
-    "--config",
-    "--file",
-    "--target",
-    "--directory",
-    "--output",
-    "--message",
-    "--model",
-    "--filter",
-    "--jobs",
-    "--user",
-    "--env",
-    "--workdir",
+# Wrapper flags that consume the following token. These are wrapper-specific:
+# for example, sudo's -n is a boolean flag while nice's -n takes a value.
+WRAPPER_PARAMETERIZED_FLAGS: Dict[str, Set[str]] = {
+    "sudo": {
+        "-C",
+        "-D",
+        "-g",
+        "-h",
+        "-p",
+        "-R",
+        "-T",
+        "-u",
+        "--chdir",
+        "--chroot",
+        "--command-timeout",
+        "--group",
+        "--host",
+        "--prompt",
+        "--user",
+    },
+    "time": {"-f", "-o", "--format", "--output"},
+    "env": {"-C", "-S", "-u", "--chdir", "--split-string", "--unset"},
+    "xargs": {
+        "-a",
+        "-d",
+        "-E",
+        "-I",
+        "-L",
+        "-n",
+        "-P",
+        "-s",
+        "--arg-file",
+        "--delimiter",
+        "--eof",
+        "--max-args",
+        "--max-chars",
+        "--max-lines",
+        "--max-procs",
+        "--replace",
+    },
+    "nice": {"-n", "--adjustment"},
+    "ionice": {
+        "-c",
+        "-n",
+        "-p",
+        "-P",
+        "-u",
+        "--class",
+        "--classdata",
+        "--pid",
+        "--pgid",
+        "--uid",
+    },
+    "strace": {"-e", "-I", "-o", "-p", "-P", "-s", "-U", "--output", "--trace"},
+    "valgrind": {"--log-file", "--tool"},
+    "gdb": {
+        "-b",
+        "-cd",
+        "-ex",
+        "-p",
+        "-x",
+        "--baud",
+        "--command",
+        "--eval-command",
+        "--pid",
+        "--se",
+        "--symbols",
+    },
 }
-
 
 @dataclasses.dataclass
 class ParsedCommand:
@@ -114,10 +114,8 @@ class ParsedCommand:
 
     raw: str
     binary: str
-    subcommand: Optional[str] = None
-    signature: str = ""
     flags: List[str] = dataclasses.field(default_factory=list)
-    args: List[str] = dataclasses.field(default_factory=list)
+    words: List[str] = dataclasses.field(default_factory=list)
     env_vars: Dict[str, str] = dataclasses.field(default_factory=dict)
     wrappers: List[str] = dataclasses.field(default_factory=list)
     redirections: List[str] = dataclasses.field(default_factory=list)
@@ -127,10 +125,8 @@ class ParsedCommand:
         return {
             "raw": self.raw,
             "binary": self.binary,
-            "subcommand": self.subcommand,
-            "signature": self.signature,
             "flags": self.flags,
-            "args": self.args,
+            "words": self.words,
             "env_vars": self.env_vars,
             "wrappers": self.wrappers,
             "redirections": self.redirections,
@@ -147,12 +143,10 @@ class ParsedPipeline:
     parser_engine: str = "bashlex"  # "bashlex" | "shlex" | "passthrough"
     commands: List[ParsedCommand] = dataclasses.field(default_factory=list)
     binaries: List[str] = dataclasses.field(default_factory=list)
-    subcommands: List[str] = dataclasses.field(default_factory=list)
-    signatures: List[str] = dataclasses.field(default_factory=list)
+    words: List[str] = dataclasses.field(default_factory=list)
     env_vars: Dict[str, str] = dataclasses.field(default_factory=dict)
     has_binary: Dict[str, bool] = dataclasses.field(default_factory=dict)
-    has_subcommand: Dict[str, bool] = dataclasses.field(default_factory=dict)
-    has_signature: Dict[str, bool] = dataclasses.field(default_factory=dict)
+    has_word: Dict[str, bool] = dataclasses.field(default_factory=dict)
     has_flag: Dict[str, bool] = dataclasses.field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -161,12 +155,10 @@ class ParsedPipeline:
             "parser_engine": self.parser_engine,
             "raw_command": self.raw_command,
             "binaries": self.binaries,
-            "subcommands": self.subcommands,
-            "signatures": self.signatures,
+            "words": self.words,
             "env_vars": self.env_vars,
             "has_binary": self.has_binary,
-            "has_subcommand": self.has_subcommand,
-            "has_signature": self.has_signature,
+            "has_word": self.has_word,
             "has_flag": self.has_flag,
             "commands": [c.to_dict() for c in self.commands],
         }
@@ -174,19 +166,16 @@ class ParsedPipeline:
     def has_command(
         self,
         binary: Optional[str] = None,
-        subcommand: Optional[str] = None,
-        signature: Optional[str] = None,
         arg_contains: Optional[str] = None,
+        word: Optional[str] = None,
     ) -> bool:
         """Predicate helper to verify if the pipeline contains matching commands."""
         for c in self.commands:
             if binary and c.binary != binary:
                 continue
-            if subcommand and c.subcommand != subcommand:
+            if arg_contains and not any(arg_contains in a for a in (c.words + c.flags)):
                 continue
-            if signature and c.signature != signature:
-                continue
-            if arg_contains and not any(arg_contains in a for a in (c.args + c.flags)):
+            if word and word not in c.words:
                 continue
             return True
         return False
@@ -205,18 +194,26 @@ class BashCommandParser:
         if not s:
             return True
 
-        # Detect PowerShell Cmdlets and Syntax
-        ps_cmdlet_pattern = r"\b(Get-|Set-|Start-|Stop-|New-|Remove-|Where-Object|Select-Object|ForEach-Object|Out-File|Invoke-)\b"
+        # Detect non-POSIX shells only from command position. Looking through the
+        # entire string misclassifies ordinary Bash arguments and quoted text.
+        ps_cmdlet_pattern = (
+            r"^(?:Get-|Set-|Start-|Stop-|New-|Remove-|Where-Object\b|"
+            r"Select-Object\b|ForEach-Object\b|Out-File\b|Invoke-)"
+        )
         if re.search(ps_cmdlet_pattern, s, re.IGNORECASE):
             return False
-        if s.startswith("$") and not s.startswith("$(") and not re.match(r"^\$[A-Za-z_][A-Za-z0-9_]*\b", s):
+        if re.match(r"^\$[A-Za-z_][A-Za-z0-9_]*\s*=", s):
             return False
-        if "pwsh" in s.lower() or "powershell" in s.lower():
+        ps_executable_pattern = (
+            r"^(?:(?:[A-Za-z]:)?[^\s]*[\\/])?"
+            r"(?:pwsh|powershell)(?:\.exe)?(?:\s|$)"
+        )
+        if re.match(ps_executable_pattern, s, re.IGNORECASE):
             return False
 
         # Detect Windows CMD specific syntax
-        cmd_pattern = r"\b(dir|type|cls|copy|move|del)\s+/[A-Za-z]"
-        if re.search(cmd_pattern, s, re.IGNORECASE):
+        cmd_pattern = r"^(?:dir|type|cls|copy|move|del)(?:\.exe)?\s+/[A-Za-z]"
+        if re.match(cmd_pattern, s, re.IGNORECASE):
             return False
 
         return True
@@ -244,19 +241,20 @@ class BashCommandParser:
         # Unwrap wrappers at start of words (e.g. sudo, time, valgrind --flags)
         idx = 0
         while idx < len(words) and words[idx] in COMMAND_WRAPPERS:
-            wrappers.append(words[idx])
+            wrapper = words[idx]
+            wrappers.append(wrapper)
             idx += 1
             # Skip flags belonging to the wrapper (e.g. valgrind --leak-check=full, sudo -u root)
             while idx < len(words) and words[idx].startswith("-"):
-                wrappers.append(words[idx])
-                if (
-                    idx + 1 < len(words)
-                    and not words[idx + 1].startswith("-")
-                    and words[idx] in ("-u", "-n", "-g", "--user", "--group")
-                ):
-                    idx += 1
-                    wrappers.append(words[idx])
+                flag = words[idx]
+                wrappers.append(flag)
                 idx += 1
+                if flag == "--":
+                    break
+                parameterized_flags = WRAPPER_PARAMETERIZED_FLAGS.get(wrapper, set())
+                if idx < len(words) and flag in parameterized_flags:
+                    wrappers.append(words[idx])
+                    idx += 1
 
         # Check for inline env vars after wrappers (e.g. sudo CC=clang CXX=clang++ ...)
         while idx < len(words) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=.*", words[idx]):
@@ -276,39 +274,24 @@ class BashCommandParser:
         else:
             binary = pathlib.Path(binary_raw).name
 
-        subcommand: Optional[str] = None
         flags: List[str] = []
-        args: List[str] = []
-
-        has_subcommand_support = binary in KNOWN_SUBCOMMAND_BINARIES
+        positional_words: List[str] = []
 
         while idx < len(words):
             w = words[idx]
             if w.startswith("-"):
                 flags.append(w)
-                if (
-                    idx + 1 < len(words)
-                    and not words[idx + 1].startswith("-")
-                    and w in PARAMETERIZED_FLAGS
-                ):
-                    idx += 1
-                    flags.append(words[idx])
-            elif has_subcommand_support and subcommand is None:
-                subcommand = w
             else:
-                args.append(w)
+                positional_words.append(w)
             idx += 1
 
-        signature = f"{binary} {subcommand}" if subcommand else binary
         raw_repr = " ".join(words)
 
         return ParsedCommand(
             raw=raw_repr,
             binary=binary,
-            subcommand=subcommand,
-            signature=signature,
             flags=flags,
-            args=args,
+            words=positional_words,
             env_vars=env_vars,
             wrappers=wrappers,
             redirections=redirections,
@@ -370,9 +353,13 @@ class BashCommandParser:
                     commands.append(cmd)
             elif node.kind == "pipeline":
                 parts = getattr(node, "parts", [])
-                cmd_parts = [p for p in parts if p.kind == "command"]
-                for i, p in enumerate(cmd_parts):
-                    op = "|" if i < len(cmd_parts) - 1 else None
+                for i, p in enumerate(parts):
+                    if p.kind != "command":
+                        continue
+                    op = None
+                    if i + 1 < len(parts) and parts[i + 1].kind == "pipe":
+                        op_start, op_end = getattr(parts[i + 1], "pos", (0, 0))
+                        op = cmd_str[op_start:op_end].strip()
                     cmd = extract_command_node(p, op_after=op)
                     if cmd:
                         commands.append(cmd)
@@ -393,9 +380,21 @@ class BashCommandParser:
                         if cmd:
                             commands.append(cmd)
                     elif p.kind == "pipeline":
-                        pipeline_parts = [sub for sub in getattr(p, "parts", []) if sub.kind == "command"]
-                        for j, sub in enumerate(pipeline_parts):
-                            sub_op = "|" if j < len(pipeline_parts) - 1 else op_after
+                        pipeline_parts = getattr(p, "parts", [])
+                        command_indexes = [
+                            j for j, sub in enumerate(pipeline_parts) if sub.kind == "command"
+                        ]
+                        for command_number, j in enumerate(command_indexes):
+                            sub = pipeline_parts[j]
+                            sub_op = op_after
+                            if (
+                                j + 1 < len(pipeline_parts)
+                                and pipeline_parts[j + 1].kind == "pipe"
+                            ):
+                                pipe_start, pipe_end = getattr(pipeline_parts[j + 1], "pos", (0, 0))
+                                sub_op = cmd_str[pipe_start:pipe_end].strip()
+                            elif command_number < len(command_indexes) - 1:
+                                sub_op = "|"
                             cmd = extract_command_node(sub, op_after=sub_op)
                             if cmd:
                                 commands.append(cmd)
@@ -506,18 +505,18 @@ class BashCommandParser:
             engine_used = "shlex"
 
         binaries = [c.binary for c in commands if c.binary]
-        subcommands = [c.subcommand for c in commands if c.subcommand]
-        signatures = [c.signature for c in commands if c.signature]
+        words = [word for c in commands for word in c.words]
         combined_env: Dict[str, str] = {}
         has_flag: Dict[str, bool] = {}
         for c in commands:
             combined_env.update(c.env_vars)
             for f in c.flags:
                 has_flag[f] = True
+                if f.startswith("--") and "=" in f:
+                    has_flag[f.split("=", 1)[0]] = True
 
         has_binary = {b: True for b in binaries}
-        has_subcommand = {s: True for s in subcommands}
-        has_signature = {sig: True for sig in signatures}
+        has_word = {word: True for word in words}
 
         return ParsedPipeline(
             raw_command=cmd_str,
@@ -525,11 +524,9 @@ class BashCommandParser:
             parser_engine=engine_used,
             commands=commands,
             binaries=binaries,
-            subcommands=subcommands,
-            signatures=signatures,
+            words=words,
             env_vars=combined_env,
             has_binary=has_binary,
-            has_subcommand=has_subcommand,
-            has_signature=has_signature,
+            has_word=has_word,
             has_flag=has_flag,
         )

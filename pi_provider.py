@@ -252,11 +252,9 @@ def run_pi_session(
                         pipeline = BashCommandParser.parse(cmd_str)
                         args["commands"] = [c.to_dict() for c in pipeline.commands]
                         args["binaries"] = pipeline.binaries
-                        args["subcommands"] = pipeline.subcommands
-                        args["signatures"] = pipeline.signatures
+                        args["words"] = pipeline.words
                         args["has_binary"] = pipeline.has_binary
-                        args["has_subcommand"] = pipeline.has_subcommand
-                        args["has_signature"] = pipeline.has_signature
+                        args["has_word"] = pipeline.has_word
                         args["has_flag"] = pipeline.has_flag
 
                 tool_call_id = str(event.get("toolCallId", f"call_{step_count}"))
@@ -288,10 +286,6 @@ def run_pi_session(
                                 span.set_attribute("command", str(args["command"]))
                             if "binaries" in args and args["binaries"]:
                                 span.set_attribute("command.binaries", json_dumps(args["binaries"]))
-                            if "subcommands" in args and args["subcommands"]:
-                                span.set_attribute("command.subcommands", json_dumps(args["subcommands"]))
-                            if "signatures" in args and args["signatures"]:
-                                span.set_attribute("command.signatures", json_dumps(args["signatures"]))
                             if "path" in args:
                                 span.set_attribute("path", str(args["path"]))
                             if "query" in args:
