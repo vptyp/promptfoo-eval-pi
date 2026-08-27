@@ -7,6 +7,7 @@ Optimized with `orjson` / `ujson` and an in-memory streaming delta assembler.
 """
 
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -450,6 +451,46 @@ def run_pi_session(
     }
 
 
+def capture_workspace_diff(workdir_path: pathlib.Path | str) -> str:
+    """Captures git diff and untracked file creations from the workspace."""
+    p = pathlib.Path(workdir_path).resolve()
+    diff_chunks = []
+    try:
+        # Tracked file diffs against HEAD
+        res = subprocess.run(
+            ["git", "-C", str(p), "diff", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            diff_chunks.append(res.stdout.strip())
+
+        # Untracked newly created files
+        status_res = subprocess.run(
+            ["git", "-C", str(p), "status", "--porcelain", "-uall"],
+            capture_output=True,
+            text=True,
+        )
+        if status_res.returncode == 0:
+            for line in status_res.stdout.splitlines():
+                if line.startswith("?? "):
+                    rel_file = line[3:].strip()
+                    full_file = p / rel_file
+                    if full_file.is_file():
+                        try:
+                            content = full_file.read_text(errors="replace")
+                            formatted_lines = "\n".join(f"+{l}" for l in content.splitlines())
+                            diff_chunks.append(
+                                f"diff --git a/{rel_file} b/{rel_file}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel_file}\n{formatted_lines}"
+                            )
+                        except Exception:
+                            diff_chunks.append(f"# New file: {rel_file}")
+    except Exception:
+        pass
+
+    return "\n\n".join(diff_chunks).strip()
+
+
 def call_api(prompt: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
     """
     Standard Promptfoo Python Provider Entrypoint.
@@ -477,27 +518,21 @@ def call_api(prompt: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
     config = options.get("config", {}) if isinstance(options, dict) else {}
     if not isinstance(config, dict):
         config = {}
-
     vars_dict = context.get("vars", {}) if isinstance(context, dict) else {}
-    if not isinstance(vars_dict, dict):
-        vars_dict = {}
 
-    cwd = vars_dict.get("cwd") or config.get("cwd")
-    model = vars_dict.get("model") or config.get("model")
-    stop_on_tool_failure = vars_dict.get(
-        "stop_on_tool_failure", config.get("stop_on_tool_failure", False)
-    )
-    max_steps = vars_dict.get("max_steps", config.get("max_steps"))
-    timeout_seconds = vars_dict.get(
-        "timeout_seconds", config.get("timeout_seconds", 120)
-    )
-    traceparent = context.get("traceparent")
-    if not traceparent and "vars" in context and isinstance(context["vars"], dict):
-        traceparent = context["vars"].get("traceparent")
+    model = config.get("model") or vars_dict.get("model")
+    stop_on_tool_failure = config.get("stop_on_tool_failure", vars_dict.get("stop_on_tool_failure", False))
+    max_steps = config.get("max_steps") or vars_dict.get("max_steps")
+    timeout_seconds = config.get("timeout_seconds") or vars_dict.get("timeout_seconds")
+    cwd = config.get("cwd") or vars_dict.get("cwd")
+    traceparent = context.get("traceparent") if isinstance(context, dict) else None
 
-    actual_prompt = str(prompt)
-    if (actual_prompt == "{{prompt}}" or not actual_prompt.strip()) and vars_dict.get("prompt"):
+    if isinstance(prompt, str) and prompt.strip():
+        actual_prompt = prompt
+    elif "prompt" in vars_dict:
         actual_prompt = str(vars_dict["prompt"])
+    else:
+        actual_prompt = str(prompt)
 
     # Workspace Isolation Options (inspired by Chromium agents/testing/workers.py)
     isolation_cfg = vars_dict.get("isolation")
@@ -521,6 +556,7 @@ def call_api(prompt: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         workdir_parent = isolation_cfg.get("workdir_parent")
 
     try:
+        git_diff = ""
         if isolation_enabled:
             target_cwd = cwd or os.getcwd()
             with WorkspaceIsolation(
@@ -538,6 +574,7 @@ def call_api(prompt: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
                     timeout_seconds=int(timeout_seconds) if timeout_seconds else 120,
                     traceparent=traceparent,
                 )
+                git_diff = capture_workspace_diff(isolated_cwd)
         else:
             session = run_pi_session(
                 prompt=actual_prompt,
@@ -548,9 +585,15 @@ def call_api(prompt: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
                 timeout_seconds=int(timeout_seconds) if timeout_seconds else 120,
                 traceparent=traceparent,
             )
+            git_diff = capture_workspace_diff(cwd or os.getcwd())
+
+        # Format output: append workspace git diff if any modifications occurred
+        final_output = session["output"]
+        if git_diff:
+            final_output = f"{final_output}\n\n### Workspace Git Diff:\n```diff\n{git_diff}\n```"
 
         return {
-            "output": session["output"],
+            "output": final_output,
             "tokenUsage": session["tokenUsage"],
             "cost": session["cost"],
             "latencyMs": session["durationMs"],
@@ -565,6 +608,7 @@ def call_api(prompt: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
                 "exitCode": session["exitCode"],
                 "isolated": isolation_enabled,
                 "isolationStrategy": isolation_strategy if isolation_enabled else None,
+                "gitDiff": git_diff,
             },
         }
     except Exception as e:

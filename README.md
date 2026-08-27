@@ -55,7 +55,8 @@ npx promptfoo view
 ├── pi_provider.py         # High-performance Python provider with orjson & delta assembler
 ├── eval_judge.py          # Universal Agent-as-a-Judge provider for semantic rubrics
 ├── isolation.py           # Test-to-test workspace isolation (worktree, copy, in-place, btrfs)
-├── test_isolation.py      # Unit tests for workspace isolation helpers
+├── tests/                 # Unit & lifecycle tests for workspace isolation & diff capture
+│   └── test_isolation.py
 ├── uv_python.sh           # Portable uv execution wrapper for zero-config environments
 ├── pyproject.toml         # Dependencies (opentelemetry-sdk, otlp exporter, orjson)
 └── package.json           # Node project scripts & dependencies
@@ -158,7 +159,7 @@ tests:
 
 ## Agent-as-a-Judge (`eval_judge.py`)
 
-For semantic evaluations (`llm-rubric`), you can use an autonomous agent CLI with workspace/environment access as the judge instead of a passive LLM API:
+For semantic evaluations (`llm-rubric`), you can route evaluation prompts to an autonomous agent CLI (`agy -p`, `claude -p`, `codex`, etc.) in non-interactive mode. The judge evaluates the agent's textual response alongside the **structured `git diff`** captured before ephemeral worktree teardown:
 
 ```yaml
 defaultTest:
@@ -211,3 +212,6 @@ tests:
         enabled: true
         strategy: "git-worktree"
 ```
+
+> [!TIP]
+> **Automatic Git Diff for Judges:** Before the isolated worktree is destroyed, [`pi_provider.py`](pi_provider.py) automatically captures `git diff HEAD` and untracked file additions, attaching the structured diff to `metadata.gitDiff` and appending it to the evaluation response. This allows [`eval_judge.py`](eval_judge.py) and `llm-rubric` to evaluate the exact line-by-line code changes made by the agent.

@@ -203,8 +203,14 @@ When detected:
 For model-graded rubric assertions (`llm-rubric`), `eval_judge.py` serves as a universal, pluggable adapter that routes evaluation prompts to an autonomous agent CLI (`agy`, `claude`, `codex`, `openclaw`, `pi`) running in non-interactive mode.
 
 ### 5.1 Why Agent-as-a-Judge?
-- **Environment Grounding:** Unlike isolated LLM APIs that only see text, an agent CLI evaluator possesses workspace and tool access (`read`, `bash`, `git diff`) and can actively verify file contents and test execution on disk.
+- **Advanced Reasoning & Grounding:** Agent CLIs (`agy -p`, `claude -p`, `codex`) excel at complex rubric evaluations, evaluating both semantic text reasoning and structured code diffs.
 - **Zero-Config Pluggability:** Swap the evaluator agent globally or per-test via `config.command` or `EVAL_JUDGE_COMMAND`.
+
+### 5.2 Structured Git Diff Feed (No Direct Worktree Access Needed)
+Following the pattern from Chromium's evaluation engine (`agents/testing/workers.py`) and SWE-bench:
+- **Provider-Scoped Worktree Cleanup:** To prevent test-to-test state corruption and eliminate cross-process temporary files, `WorkspaceIsolation` destroys the ephemeral worktree immediately upon provider exit.
+- **Automatic Diff Capture:** Before teardown, `pi_provider.py` captures `git diff HEAD` (staged and unstaged) plus all newly created untracked files into `metadata.gitDiff`.
+- **Embedded Diff in Output:** The captured diff is embedded directly in `output` and fed to `eval_judge.py` / `llm-rubric`. The judge evaluates the exact line-by-line code modifications without needing access to the ephemeral worktree.
 
 ---
 

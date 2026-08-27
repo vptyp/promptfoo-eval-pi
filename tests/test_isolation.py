@@ -1,8 +1,11 @@
 # Unit tests for isolation.py
 import pathlib
 import subprocess
+import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from isolation import WorkspaceIsolation, get_git_root
 
@@ -58,6 +61,20 @@ class TestWorkspaceIsolation(unittest.TestCase):
         # After exit, in-place changes should be reverted and cleaned
         self.assertEqual(self.readme.read_text(), "Initial content\n")
         self.assertFalse((self.repo_path / "untracked.txt").exists())
+
+    def test_capture_workspace_diff(self):
+        from pi_provider import capture_workspace_diff
+
+        with WorkspaceIsolation(self.repo_path, strategy="git-worktree", clean=True) as isolated_path:
+            # Modify tracked file
+            (isolated_path / "README.md").write_text("Modified content\n")
+            # Create new untracked file
+            (isolated_path / "new_module.py").write_text("def test(): pass\n")
+
+            diff = capture_workspace_diff(isolated_path)
+            self.assertIn("Modified content", diff)
+            self.assertIn("new_module.py", diff)
+            self.assertIn("def test(): pass", diff)
 
 
 if __name__ == "__main__":
