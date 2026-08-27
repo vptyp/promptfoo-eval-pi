@@ -82,7 +82,7 @@ def call_api(prompt: str, options: dict, context: dict) -> dict:
             },
             "cost": float,             # USD cost reported by pi
             "metadata": {
-                "skillCalls": List[str],      # For `skill-used` assertion
+                "skillCalls": List[dict],      # List of {"name": str, "path": str, "source": str} for skill-used
                 "toolCalls": List[dict],       # Ordered list of all tool executions
                 "turns": List[dict],           # Assembled reasoning + content per turn
                 "trace": {                     # OTel-compliant spans for trajectory assertions
@@ -175,11 +175,24 @@ To enable zero-code trajectory assertions in YAML, `pi_provider.py` integrates n
 }
 ```
 
-### 4.2 Skill Detection Rules
-A skill invocation is recognized and added to `metadata.skillCalls` when:
-1. `read` tool accesses `*/<skill-name>/SKILL.md`.
-2. `bash` tool executes a script containing `*/skills/<skill-name>/*`.
-3. An explicit skill parameter or flag is passed in `pi` arguments.
+### 4.2 Skill Detection Rules & Schema
+A skill invocation is recognized when:
+1. `read` tool accesses `*/SKILL.md` (e.g. `.skills/<name>/SKILL.md` or `skills/<name>/SKILL.md`).
+2. `bash` tool executes a script inside `*/.skills/<name>/*` or `*/skills/<name>/*`.
+
+When detected:
+- An entry is recorded in `metadata.skillCalls`:
+  ```json
+  [
+    {
+      "name": "pointcloud-ops",
+      "path": ".skills/pointcloud-ops/SKILL.md",
+      "source": "read"
+    }
+  ]
+  ```
+- The active OpenTelemetry child span is annotated with `skill.name = "<name>"`.
+- Promptfoo's `skill-used` validator inspects `metadata.skillCalls` to match against `value: "<name>"`.
 
 ---
 
