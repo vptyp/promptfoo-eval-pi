@@ -1,0 +1,66 @@
+description: "Pi Coding Agent Evaluation Suite"
+
+# Python provider pointing to pi_provider.py
+providers:
+  - id: "file://pi_provider.py"
+    label: "pi-agent"
+    config:
+      timeout_seconds: 120
+
+defaultTest:
+  assert:
+    # Ensure the agent execution produced valid spans and no crash
+    - type: javascript
+      value: "context.metadata.exitCode === 0"
+
+tests:
+  # ============================================================================
+  # 1. Skill Verification Test (Automatic SKILL.md read detection)
+  # ============================================================================
+  - description: "Verify 'uv' skill is read when managing python packages"
+    vars:
+      prompt: "Use the uv skill to inspect available dependencies"
+    assert:
+      - type: skill-used
+        value: "uv"
+
+  # ============================================================================
+  # 2. Tool & Specific CLI Command Match via Bash
+  # ============================================================================
+  - description: "Verify pytest is invoked through bash tool"
+    vars:
+      prompt: "Run the test suite using pytest"
+    assert:
+      - type: trajectory:tool-used
+        value: "bash"
+      - type: trajectory:tool-args-match
+        value:
+          name: "bash"
+          args:
+            command: "*pytest*"
+
+  # ============================================================================
+  # 3. Chronological Trajectory Sequence
+  # ============================================================================
+  - description: "Verify file is read before edit is performed"
+    vars:
+      prompt: "Find and fix the typo in config.py"
+    assert:
+      - type: trajectory:tool-sequence
+        value:
+          steps:
+            - read
+            - edit
+
+  # ============================================================================
+  # 4. Strict Condition: Stop on Tool Failure / Error Spans Check
+  # ============================================================================
+  - description: "Verify run executes with zero tool failures"
+    vars:
+      prompt: "List the files in the directory"
+      stop_on_tool_failure: true
+    assert:
+      - type: trace-error-spans
+        value: 0
+      - type: javascript
+        value: "context.metadata.stoppedEarly === false"

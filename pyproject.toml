@@ -1,0 +1,17 @@
+[project]
+name = "prompt-eval"
+version = "0.1.0"
+description = "Deterministic Agent Evaluation Suite for Pi Agent with Promptfoo & OpenTelemetry"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "opentelemetry-api>=1.25.0",
+    "opentelemetry-sdk>=1.25.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.25.0",
+    "orjson>=3.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]

@@ -1,0 +1,12 @@
+{
+  "name": "pi-agent-eval",
+  "version": "1.0.0",
+  "description": "Promptfoo evaluation suite for the pi coding agent",
+  "scripts": {
+    "test": "npx promptfoo eval",
+    "view": "npx promptfoo view"
+  },
+  "devDependencies": {
+    "promptfoo": "latest"
+  }
+}

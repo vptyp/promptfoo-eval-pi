@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node & Promptfoo
+node_modules/
+.promptfoo/
+.promptfoo_cache/
+
+# Local target test repos (evaluated independently)
+cloudPointRPC
+cloudPointRPC/
+
+# OS & Editor
+.DS_Store
+.vscode/
+.idea/
