@@ -54,6 +54,8 @@ npx promptfoo view
 ├── promptfooconfig.yaml   # Promptfoo evaluation test suite and assertions
 ├── pi_provider.py         # High-performance Python provider with orjson & delta assembler
 ├── eval_judge.py          # Universal Agent-as-a-Judge provider for semantic rubrics
+├── isolation.py           # Test-to-test workspace isolation (worktree, copy, in-place, btrfs)
+├── test_isolation.py      # Unit tests for workspace isolation helpers
 ├── uv_python.sh           # Portable uv execution wrapper for zero-config environments
 ├── pyproject.toml         # Dependencies (opentelemetry-sdk, otlp exporter, orjson)
 └── package.json           # Node project scripts & dependencies
@@ -181,4 +183,31 @@ Override globally via environment variable:
 ```bash
 export EVAL_JUDGE_COMMAND="claude -p"
 npx promptfoo eval
+```
+
+---
+
+## Test-to-Test Workspace Isolation (`isolation.py`)
+
+Inspired by Chromium's [`agents/testing/workers.py`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/agents/testing/workers.py), you can run destructive tests in ephemeral, isolated workspaces that automatically clean up when done:
+
+```yaml
+providers:
+  - id: "file://pi_provider.py"
+    config:
+      isolation:
+        enabled: true
+        strategy: "git-worktree" # git-worktree (default) | copy | in-place | btrfs
+        clean: true              # auto-destroy workdir on completion
+```
+
+Or configure per-test:
+```yaml
+tests:
+  - description: "Destructive refactoring test"
+    vars:
+      prompt: "Refactor PointCloudBuilder and delete legacy headers"
+      isolation:
+        enabled: true
+        strategy: "git-worktree"
 ```

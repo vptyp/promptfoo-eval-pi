@@ -13,6 +13,8 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional
 
+from isolation import WorkspaceIsolation
+
 # ------------------------------------------------------------------------------
 # High-Performance JSON Parser with Fallbacks (orjson -> ujson -> stdlib json)
 # ------------------------------------------------------------------------------
@@ -497,16 +499,55 @@ def call_api(prompt: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
     if (actual_prompt == "{{prompt}}" or not actual_prompt.strip()) and vars_dict.get("prompt"):
         actual_prompt = str(vars_dict["prompt"])
 
+    # Workspace Isolation Options (inspired by Chromium agents/testing/workers.py)
+    isolation_cfg = vars_dict.get("isolation")
+    if isolation_cfg is None:
+        isolation_cfg = config.get("isolation", False)
+
+    isolation_enabled = False
+    isolation_strategy = "git-worktree"
+    isolation_clean = True
+    workdir_parent = None
+
+    if isinstance(isolation_cfg, bool):
+        isolation_enabled = isolation_cfg
+    elif isinstance(isolation_cfg, str):
+        isolation_enabled = True
+        isolation_strategy = isolation_cfg
+    elif isinstance(isolation_cfg, dict):
+        isolation_enabled = bool(isolation_cfg.get("enabled", True))
+        isolation_strategy = str(isolation_cfg.get("strategy", "git-worktree"))
+        isolation_clean = bool(isolation_cfg.get("clean", True))
+        workdir_parent = isolation_cfg.get("workdir_parent")
+
     try:
-        session = run_pi_session(
-            prompt=actual_prompt,
-            cwd=cwd,
-            model=model,
-            stop_on_tool_failure=bool(stop_on_tool_failure),
-            max_steps=max_steps,
-            timeout_seconds=int(timeout_seconds) if timeout_seconds else 120,
-            traceparent=traceparent,
-        )
+        if isolation_enabled:
+            target_cwd = cwd or os.getcwd()
+            with WorkspaceIsolation(
+                src_dir=target_cwd,
+                strategy=isolation_strategy,
+                clean=isolation_clean,
+                workdir_parent=workdir_parent,
+            ) as isolated_cwd:
+                session = run_pi_session(
+                    prompt=actual_prompt,
+                    cwd=str(isolated_cwd),
+                    model=model,
+                    stop_on_tool_failure=bool(stop_on_tool_failure),
+                    max_steps=max_steps,
+                    timeout_seconds=int(timeout_seconds) if timeout_seconds else 120,
+                    traceparent=traceparent,
+                )
+        else:
+            session = run_pi_session(
+                prompt=actual_prompt,
+                cwd=cwd,
+                model=model,
+                stop_on_tool_failure=bool(stop_on_tool_failure),
+                max_steps=max_steps,
+                timeout_seconds=int(timeout_seconds) if timeout_seconds else 120,
+                traceparent=traceparent,
+            )
 
         return {
             "output": session["output"],
@@ -522,6 +563,8 @@ def call_api(prompt: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
                 "stopReason": session["stopReason"],
                 "stepCount": len(session["toolCalls"]),
                 "exitCode": session["exitCode"],
+                "isolated": isolation_enabled,
+                "isolationStrategy": isolation_strategy if isolation_enabled else None,
             },
         }
     except Exception as e:

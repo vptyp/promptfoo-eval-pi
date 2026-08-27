@@ -231,3 +231,21 @@ For large agent evaluations (e.g. 300+ LLM turns, 300+ tool invocations):
 1. **`orjson` Fast Serialization Engine:** Uses `orjson` (compiled Rust) for JSON parsing and serialization (~5x faster than stdlib `json`), with automatic fallback to `ujson` or stdlib `json`.
 2. **Tool Output Truncation Guard:** Tool output results (`t["result"]`) exceeding **32 KB** are truncated with a metadata indicator `[... truncated by pi_provider ...]` to protect Promptfoo's SQLite database from memory bloat while keeping full assertion accuracy.
 3. **Zero-Config Virtualenv (`uv_python.sh`):** Executes on-demand dependencies (`opentelemetry-sdk`, `orjson`) via Astral's `uv` runner without requiring local virtualenv creation in target project directories.
+
+---
+
+## 8. Test-to-Test Workspace Isolation (`isolation.py`)
+
+Modeled directly on Chromium's [`agents/testing/workers.py`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/agents/testing/workers.py) (`WorkDir` & `checkout_helpers.py`), `isolation.py` allows tests to perform destructive mutations (file deletion, editing, build rebuilds) without dirtying the source repository.
+
+### 8.1 Isolation Strategies
+
+| Strategy | Implementation | Overhead | Use Case |
+| :--- | :--- | :--- | :--- |
+| **`git-worktree`** | `git worktree add --detach <path> HEAD` | <50ms | Code edits, refactoring, test additions. |
+| **`copy` / `reflink`** | `cp -a --reflink=auto <src>/. <dest>` | <200ms | Tasks modifying untracked build folders (`build/`). |
+| **`in-place`** | `git stash` $\to$ test $\to$ `git reset --hard && git clean -fd` | <100ms | In-place testing where path identity must be preserved. |
+| **`btrfs`** | `btrfs subvolume snapshot <src> <dest>` | <10ms | Linux hosts with Btrfs partitions. |
+
+### 8.2 Teardown & Lifecycle
+`WorkspaceIsolation` implements Python's context manager interface (`AbstractContextManager`). When `clean=True` (default), the temporary workdir is cleanly removed via `git worktree remove --force` or `shutil.rmtree` on test exit, guaranteeing zero state leakage between test iterations.
