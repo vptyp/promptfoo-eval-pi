@@ -37,7 +37,8 @@ tests:
         value:
           name: "bash"
           args:
-            command: "*pytest*"
+            has_binary:
+              pytest: true
 
   # ============================================================================
   # 3. Chronological Trajectory Sequence

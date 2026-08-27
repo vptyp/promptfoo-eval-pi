@@ -20,6 +20,7 @@ flowchart TD
         Entry["call_api(prompt, options, context)\n• Extracts W3C traceparent"]
         IsoManager["WorkspaceIsolation (isolation.py)\n• git-worktree / copy / in-place / btrfs\n• Ephemeral workdir provisioning & teardown"]
         StreamRunner["Live Subprocess & Stream Interceptor\n(Fast I/O with orjson / ujson fallback)"]
+        CmdParser["Deterministic Command Parser (command_parser.py)\n• GNU bashlex AST + shlex fallback\n• has_signature / has_binary boolean maps"]
         DeltaAssembler["Streaming Delta Assembler\n• Collapses text_delta / thinking_delta\n• Builds cohesive turn structures\n• 90-95% trace payload compression"]
         OTelExporter["OpenTelemetry Tracer & OTLP Exporter\n(Exports live protobuf spans to port 4318)"]
         Guard["Execution Guards\n(stop_on_tool_failure, max_steps, timeout)"]
@@ -43,7 +44,8 @@ flowchart TD
     StreamRunner -->|spawns| PiProc
     PiProc -->|stdout JSON lines| JSONL
     JSONL --> StreamRunner
-    StreamRunner --> DeltaAssembler
+    StreamRunner --> CmdParser
+    CmdParser --> DeltaAssembler
     DeltaAssembler --> Guard
     StreamRunner -->|Live Spans| OTelExporter
     OTelExporter -->|OTLP Proto HTTP| OTLPRecv
