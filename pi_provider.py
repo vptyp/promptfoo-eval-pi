@@ -68,15 +68,16 @@ MAX_TOOL_RESULT_BYTES = 32 * 1024  # 32 KB result truncation limit
 def _extract_skill_name(path_or_cmd: str) -> Optional[str]:
     """
     Extracts skill name from a path referencing SKILL.md or a script in a skill folder.
-    E.g. '/path/to/skills/uv/SKILL.md' -> 'uv'
+    E.g. '/path/to/.skills/pointcloud-ops/SKILL.md' -> 'pointcloud-ops'
+         '.skills/uv/scripts/sync.sh' -> 'uv'
     """
     if not isinstance(path_or_cmd, str):
         return None
-    match = re.search(r"[/|\\](?:skills[/|\\])?([^/|\\]+)[/|\\]SKILL\.md", path_or_cmd, re.IGNORECASE)
+    match = re.search(r"(?:^|[/|\\])(?:\.?skills[/|\\])?([^/|\\]+)[/|\\]SKILL\.md$", path_or_cmd, re.IGNORECASE)
     if match:
         return match.group(1)
 
-    match_script = re.search(r"[/|\\]skills[/|\\]([^/|\\]+)[/|\\]", path_or_cmd)
+    match_script = re.search(r"(?:^|[/|\\])\.?skills[/|\\]([^/|\\]+)[/|\\]", path_or_cmd)
     if match_script:
         return match_script.group(1)
 
@@ -229,19 +230,20 @@ def run_pi_session(
                 if not isinstance(args, dict):
                     args = {"raw": args}
 
+                skill_name: Optional[str] = None
                 # Check for skill reads
                 if tool_name == "read":
                     path = str(args.get("path", ""))
-                    skill = _extract_skill_name(path)
-                    if skill and skill not in skill_calls:
-                        skill_calls.append(skill)
+                    skill_name = _extract_skill_name(path)
+                    if skill_name and not any(s.get("name") == skill_name for s in skill_calls):
+                        skill_calls.append({"name": skill_name, "path": path, "source": "read"})
 
                 # Check for skill script executions
                 elif tool_name == "bash":
                     cmd_str = str(args.get("command", ""))
-                    skill = _extract_skill_name(cmd_str)
-                    if skill and skill not in skill_calls:
-                        skill_calls.append(skill)
+                    skill_name = _extract_skill_name(cmd_str)
+                    if skill_name and not any(s.get("name") == skill_name for s in skill_calls):
+                        skill_calls.append({"name": skill_name, "path": cmd_str, "source": "bash"})
 
                 tool_call_id = str(event.get("toolCallId", f"call_{step_count}"))
                 tool_info = {
@@ -264,6 +266,8 @@ def run_pi_session(
                         )
                         span.set_attribute("tool.name", tool_name)
                         span.set_attribute("gen_ai.tool.name", tool_name)
+                        if skill_name:
+                            span.set_attribute("skill.name", skill_name)
                         if isinstance(args, dict):
                             span.set_attribute("tool.args", json_dumps(args))
                             if "command" in args:
