@@ -11,16 +11,23 @@ flowchart TD
     subgraph PF [Promptfoo Evaluation Framework]
         Config["promptfooconfig.yaml"]
         Runner["Promptfoo Test Engine"]
+        OTLPRecv["OTLP HTTP Trace Receiver\n(Port 4318 / SQLite TraceStore)"]
         UI["Promptfoo Web UI / Reporter"]
         Assertions["Assertion Engine\n• skill-used\n• trajectory:tool-used\n• trajectory:tool-args-match\n• trajectory:tool-sequence\n• trace-error-spans\n• llm-rubric"]
     end
 
-    subgraph Provider ["Python Provider (pi_provider.py)"]
-        Entry["call_api(prompt, options, context)"]
+    subgraph Provider ["Target Agent Provider (pi_provider.py)"]
+        Entry["call_api(prompt, options, context)\n• Extracts W3C traceparent"]
         StreamRunner["Live Subprocess & Stream Interceptor\n(Fast I/O with orjson / ujson fallback)"]
         DeltaAssembler["Streaming Delta Assembler\n• Collapses text_delta / thinking_delta\n• Builds cohesive turn structures\n• 90-95% trace payload compression"]
-        Normalizer["Trace & Span Normalizer\n(OTel Spans + Metadata + Tokens)"]
+        OTelExporter["OpenTelemetry Tracer & OTLP Exporter\n(Exports live protobuf spans to port 4318)"]
         Guard["Execution Guards\n(stop_on_tool_failure, max_steps, timeout)"]
+    end
+
+    subgraph JudgeProvider ["Agent-as-a-Judge Provider (eval_judge.py)"]
+        JudgeEntry["call_api(prompt, options, context)"]
+        JudgeCLI["Pluggable Agent CLI\n(agy -p, claude -p, codex, openclaw)"]
+        JudgeEnv["Workspace & Environment Access\n(Inspects code diff, runs build/tests)"]
     end
 
     subgraph Target ["Target Agent (pi CLI)"]
@@ -29,16 +36,21 @@ flowchart TD
     end
 
     Config --> Runner
-    Runner --> Entry
+    Runner -->|1. Runs target agent| Entry
     Entry --> StreamRunner
     StreamRunner -->|spawns| PiProc
     PiProc -->|stdout JSON lines| JSONL
     JSONL --> StreamRunner
     StreamRunner --> DeltaAssembler
     DeltaAssembler --> Guard
-    Guard --> Normalizer
-    Normalizer -->|ProviderResponse via orjson| Runner
-    Runner --> Assertions
+    StreamRunner -->|Live Spans| OTelExporter
+    OTelExporter -->|OTLP Proto HTTP| OTLPRecv
+    DeltaAssembler -->|ProviderResponse| Runner
+    Runner -->|2. Evaluates Trajectory Spans| Assertions
+    Runner -->|3. Evaluates Semantic Rubrics| JudgeEntry
+    JudgeEntry --> JudgeCLI
+    JudgeCLI --> JudgeEnv
+    JudgeCLI -->|JSON Verdict| Assertions
     Assertions --> UI
 ```
 
@@ -119,9 +131,18 @@ flowchart LR
 
 ---
 
-## 4. Trace & Span Normalization for Trajectory Assertions
+## 4. OpenTelemetry OTLP Instrumentation & Trajectory Assertions
 
-To enable zero-code trajectory assertions in YAML, `pi_provider.py` synthesizes standard OpenTelemetry spans inside `metadata.trace.spans`:
+### 4.1 Live OTLP HTTP Protobuf Export Pipeline
+To enable zero-code trajectory assertions in YAML, `pi_provider.py` integrates native OpenTelemetry instrumentation:
+
+1. **W3C `traceparent` Propagation:** Extracts Promptfoo's active `context['traceparent']` so that all generated tool spans share the exact `trace_id` required for Promptfoo's SQLite `TraceStore`.
+2. **Live Span Generation:** On each `tool_execution_start`, a child span is started with attributes:
+   - `tool.name` & `gen_ai.tool.name`: Target tool name (`bash`, `read`, `edit`, `write`).
+   - `tool.args`: Serialized arguments object.
+   - `command` / `path` / `query`: Granular attributes for argument matching.
+3. **Status & Error Recording:** On `tool_execution_end`, span status is set to `StatusCode.OK` or `StatusCode.ERROR` with `is_error` and duration metrics.
+4. **Protobuf OTLP Export:** Spans are flushed via `OTLPSpanExporter` over HTTP to Promptfoo's embedded receiver at `http://localhost:4318/v1/traces`.
 
 ```json
 {
@@ -131,9 +152,8 @@ To enable zero-code trajectory assertions in YAML, `pi_provider.py` synthesizes 
         "name": "bash",
         "attributes": {
           "tool.name": "bash",
-          "tool.args": { "command": "pytest tests/test_calc.py" },
-          "tool.arguments": { "command": "pytest tests/test_calc.py" },
-          "tool.input": { "command": "pytest tests/test_calc.py" },
+          "command": "meson compile -C build",
+          "tool.args": { "command": "meson compile -C build" },
           "tool.is_error": false,
           "gen_ai.turn.index": 0
         },
@@ -143,10 +163,8 @@ To enable zero-code trajectory assertions in YAML, `pi_provider.py` synthesizes 
         "name": "read",
         "attributes": {
           "tool.name": "read",
-          "tool.args": { "path": "/home/user/skills/uv/SKILL.md" },
-          "tool.arguments": { "path": "/home/user/skills/uv/SKILL.md" },
-          "tool.input": { "path": "/home/user/skills/uv/SKILL.md" },
-          "skill.name": "uv",
+          "path": "src/cloud_point/point_cloud_builder.cpp",
+          "tool.args": { "path": "src/cloud_point/point_cloud_builder.cpp" },
           "tool.is_error": false,
           "gen_ai.turn.index": 1
         },
@@ -157,7 +175,7 @@ To enable zero-code trajectory assertions in YAML, `pi_provider.py` synthesizes 
 }
 ```
 
-### 4.1 Skill Detection Rules
+### 4.2 Skill Detection Rules
 A skill invocation is recognized and added to `metadata.skillCalls` when:
 1. `read` tool accesses `*/<skill-name>/SKILL.md`.
 2. `bash` tool executes a script containing `*/skills/<skill-name>/*`.
@@ -165,7 +183,17 @@ A skill invocation is recognized and added to `metadata.skillCalls` when:
 
 ---
 
-## 5. Execution Interception & Early Stop Conditions
+## 5. Agent-as-a-Judge Architecture (`eval_judge.py`)
+
+For model-graded rubric assertions (`llm-rubric`), `eval_judge.py` serves as a universal, pluggable adapter that routes evaluation prompts to an autonomous agent CLI (`agy`, `claude`, `codex`, `openclaw`, `pi`) running in non-interactive mode.
+
+### 5.1 Why Agent-as-a-Judge?
+- **Environment Grounding:** Unlike isolated LLM APIs that only see text, an agent CLI evaluator possesses workspace and tool access (`read`, `bash`, `git diff`) and can actively verify file contents and test execution on disk.
+- **Zero-Config Pluggability:** Swap the evaluator agent globally or per-test via `config.command` or `EVAL_JUDGE_COMMAND`.
+
+---
+
+## 6. Execution Interception & Early Stop Conditions
 
 The provider supports runtime condition checks configured per test via `context.vars` or provider `options.config`:
 
@@ -183,9 +211,10 @@ The provider supports runtime condition checks configured per test via `context.
 
 ---
 
-## 6. High-Performance Processing & Memory Safeguards
+## 7. High-Performance Processing & Memory Safeguards
 
 For large agent evaluations (e.g. 300+ LLM turns, 300+ tool invocations):
 
 1. **`orjson` Fast Serialization Engine:** Uses `orjson` (compiled Rust) for JSON parsing and serialization (~5x faster than stdlib `json`), with automatic fallback to `ujson` or stdlib `json`.
 2. **Tool Output Truncation Guard:** Tool output results (`t["result"]`) exceeding **32 KB** are truncated with a metadata indicator `[... truncated by pi_provider ...]` to protect Promptfoo's SQLite database from memory bloat while keeping full assertion accuracy.
+3. **Zero-Config Virtualenv (`uv_python.sh`):** Executes on-demand dependencies (`opentelemetry-sdk`, `orjson`) via Astral's `uv` runner without requiring local virtualenv creation in target project directories.
