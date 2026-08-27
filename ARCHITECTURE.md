@@ -178,23 +178,36 @@ To enable zero-code trajectory assertions in YAML, `pi_provider.py` integrates n
 ```
 
 ### 4.2 Skill Detection Rules & Schema
-A skill invocation is recognized when:
-1. `read` tool accesses `*/SKILL.md` (e.g. `.skills/<name>/SKILL.md` or `skills/<name>/SKILL.md`).
-2. `bash` tool executes a script inside `*/.skills/<name>/*` or `*/skills/<name>/*`.
 
-When detected:
-- An entry is recorded in `metadata.skillCalls`:
+Promptfoo's native `skill-used` assertion validates skills by matching against `metadata.skillCalls`:
+- When `read` or `bash` touches a path/command matching `.skills/<name>/...`, it records:
   ```json
-  [
-    {
-      "name": "pointcloud-ops",
-      "path": ".skills/pointcloud-ops/SKILL.md",
-      "source": "read"
-    }
-  ]
+  { "name": "<name>", "path": "<path>", "source": "read|bash" }
   ```
 - The active OpenTelemetry child span is annotated with `skill.name = "<name>"`.
 - Promptfoo's `skill-used` validator inspects `metadata.skillCalls` to match against `value: "<name>"`.
+
+### 4.3 Deterministic Shell Command Parsing (`command_parser.py`)
+
+Because Promptfoo's native `trajectory:tool-args-match` uses strict equality (`util.isDeepStrictEqual`) without regex support on argument values, `pi_provider.py` integrates a deterministic shell parsing engine powered by **`bashlex`** (GNU Bash AST) with an automatic standard library **`shlex`** fallback:
+
+1. **Compound Command & Pipeline Normalization:** Chained commands (`cd build && meson test -C build -v || exit 1`) and stream redirections (`> /dev/null`, `2>&1`) are decomposed into structured `commands` objects.
+2. **Boolean Dictionary Maps for Promptfoo:** To support Promptfoo's partial-matching mode on dynamic tool calls, every `bash` tool call args object is enriched with:
+   - `has_binary: { "<binary>": true }` (e.g. `meson: true`, `cd: true`)
+   - `has_subcommand: { "<subcommand>": true }` (e.g. `test: true`, `setup: true`)
+   - `has_signature: { "<signature>": true }` (e.g. `"meson test": true`, `"git commit": true`)
+   - `has_flag: { "<flag>": true }` (e.g. `"-C": true`, `"-v": true`)
+3. **Writing Resilient Trajectory Assertions:**
+   ```yaml
+   assert:
+     - type: trajectory:tool-args-match
+       value:
+         name: "bash"
+         args:
+           has_signature:
+             "meson test": true
+   ```
+   This passes 100% deterministically regardless of whether the agent ran `meson test`, `cd build && meson test -v`, or `meson setup build && ninja && meson test`.
 
 ---
 

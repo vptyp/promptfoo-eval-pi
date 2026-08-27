@@ -53,9 +53,11 @@ npx promptfoo view
 ├── README.md              # Project documentation and quickstart
 ├── promptfooconfig.yaml   # Promptfoo evaluation test suite and assertions
 ├── pi_provider.py         # High-performance Python provider with orjson & delta assembler
+├── command_parser.py      # Deterministic GNU Bash (bashlex) & POSIX (shlex) parser
 ├── eval_judge.py          # Universal Agent-as-a-Judge provider for semantic rubrics
 ├── isolation.py           # Test-to-test workspace isolation (worktree, copy, in-place, btrfs)
-├── tests/                 # Unit & lifecycle tests for workspace isolation & diff capture
+├── tests/                 # Unit & lifecycle tests (isolation, command parser, diff capture)
+│   ├── test_command_parser.py
 │   └── test_isolation.py
 ├── uv_python.sh           # Portable uv execution wrapper for zero-config environments
 ├── pyproject.toml         # Dependencies (opentelemetry-sdk, otlp exporter, orjson)
@@ -116,6 +118,23 @@ tests:
             - edit
             - bash
 
+  # --------------------------------------------------------------------------
+  # 3. Deterministic Shell Command Matching (has_signature / has_binary)
+  # --------------------------------------------------------------------------
+  - description: "Match command execution regardless of chaining or flags"
+    vars:
+      prompt: "Run project tests with meson test"
+    assert:
+      - type: trajectory:tool-args-match
+        value:
+          name: "bash"
+          args:
+            has_signature:
+              "meson test": true
+
+  # --------------------------------------------------------------------------
+  # 4. Ordered Tool Sequence Verification
+  # --------------------------------------------------------------------------
   - description: "Verify ordered tool sequence: clean -> compile"
     vars:
       prompt: "Execute in two steps: meson compile --clean then meson compile"

@@ -9,6 +9,7 @@ dependencies = [
     "opentelemetry-sdk>=1.25.0",
     "opentelemetry-exporter-otlp-proto-http>=1.25.0",
     "orjson>=3.10.0",
+    "bashlex>=0.18",
 ]
 
 [project.optional-dependencies]
