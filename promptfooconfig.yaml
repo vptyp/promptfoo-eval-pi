@@ -5,6 +5,7 @@ providers:
   - id: "file://pi_provider.py"
     label: "pi-agent"
     config:
+      pythonExecutable: "./uv_python.sh"
       timeout_seconds: 120
 
 defaultTest:

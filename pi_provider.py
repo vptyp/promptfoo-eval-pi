@@ -144,14 +144,6 @@ def run_pi_session(
     cmd.append(str(prompt))
 
     env = os.environ.copy()
-    extra_paths = [
-        os.path.expanduser("~/.npm-packages/bin"),
-        os.path.expanduser("~/.local/bin"),
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-    ]
-    env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "")
 
     start_time = time.time()
     proc = subprocess.Popen(

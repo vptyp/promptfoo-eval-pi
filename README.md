@@ -25,7 +25,7 @@ A test evaluation suite for the [`pi`](https://pi.dev) coding agent running in `
 ## Quickstart
 
 ### 1. Prerequisites
-- **Node.js** (v18+)
+- **Node.js** (v22.19+; required by current `pi` releases)
 - **`uv` package manager** (required for on-demand OpenTelemetry dependencies):
   ```bash
   curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -33,7 +33,34 @@ A test evaluation suite for the [`pi`](https://pi.dev) coding agent running in `
 - **`pi` CLI** installed and authenticated (e.g. `pi --version`)
 
 ### 2. Run Evaluations
-The runner automatically uses `uv_python.sh` to manage OpenTelemetry dependencies on-demand without manual virtualenv management.
+The checked-in configuration selects `uv_python.sh` as Promptfoo's Python
+executable:
+
+```yaml
+providers:
+  - id: "file://pi_provider.py"
+    config:
+      pythonExecutable: "./uv_python.sh"
+```
+
+Promptfoo passes its Python worker arguments to this executable. The wrapper
+resolves the evaluation harness directory, then runs:
+
+```bash
+uv run --all-extras --project <evaluation-harness> python <promptfoo arguments>
+```
+
+This creates or updates the harness's `.venv` from `pyproject.toml` and
+`uv.lock`, including the development extras, without requiring the caller to
+activate a virtual environment. Because `--project` is anchored to the wrapper's
+directory, the same wrapper also works when Promptfoo is launched from a target
+repository. For a configuration stored elsewhere, use the wrapper's absolute
+path for `pythonExecutable`.
+
+The first run may take longer while `uv` prepares the environment. The wrapper
+must remain executable. It preserves the caller's environment, and
+`pi_provider.py` passes that environment to `pi` unchanged; this is important
+for selecting the intended `node` from Linuxbrew, `nvm`, `mise`, or `asdf`.
 
 ```bash
 # Run evaluations in any project

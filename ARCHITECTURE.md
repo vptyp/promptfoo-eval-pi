@@ -101,6 +101,41 @@ def call_api(prompt: str, options: dict, context: dict) -> dict:
 
 ---
 
+### 2.2 Python Runtime Bootstrap (`uv_python.sh`)
+
+The provider configuration sets `pythonExecutable: ./uv_python.sh`. Promptfoo
+therefore starts its persistent Python worker through the wrapper instead of a
+system Python interpreter. The wrapper forwards Promptfoo's arguments unchanged
+and replaces itself with:
+
+```bash
+uv run --all-extras --project "$PROMPT_EVAL_DIR" python "$@"
+```
+
+`PROMPT_EVAL_DIR` is derived from the wrapper's own location. This gives the
+runtime three useful properties:
+
+1. **Location independence:** dependency resolution remains anchored to this
+   evaluation harness even when Promptfoo runs from the repository under test.
+2. **Reproducible dependencies:** `uv` synchronizes the environment from
+   `pyproject.toml` and `uv.lock`; `--all-extras` also installs the development
+   tools used by the test suite.
+3. **No activation step:** callers do not need to source `.venv/bin/activate` or
+   install OpenTelemetry and serialization packages into their system Python.
+
+For external Promptfoo configurations, `pythonExecutable` should contain the
+absolute path to `uv_python.sh`. The script must be executable and `uv` must be
+available on the inherited `PATH`.
+
+The environment boundary is intentionally transparent. `uv_python.sh` inherits
+the environment that launched Promptfoo, and `pi_provider.py` copies that
+environment unchanged into the `pi` subprocess. In particular, the provider
+must not prepend `/usr/bin` or `/usr/local/bin` to `PATH`: `pi` uses
+`#!/usr/bin/env node`, so reordering `PATH` can silently replace a version-managed
+Node.js runtime with an incompatible system Node.js.
+
+---
+
 ## 3. Event Stream & Delta Assembly
 
 ### 3.1 `pi --mode json` Event Stream Model
@@ -287,7 +322,7 @@ For large agent evaluations (e.g. 300+ LLM turns, 300+ tool invocations):
 
 1. **`orjson` Fast Serialization Engine:** Uses `orjson` (compiled Rust) for JSON parsing and serialization (~5x faster than stdlib `json`), with automatic fallback to `ujson` or stdlib `json`.
 2. **Tool Output Truncation Guard:** Tool output results (`t["result"]`) exceeding **32 KB** are truncated with a metadata indicator `[... truncated by pi_provider ...]` to protect Promptfoo's SQLite database from memory bloat while keeping full assertion accuracy.
-3. **Zero-Config Virtualenv (`uv_python.sh`):** Executes on-demand dependencies (`opentelemetry-sdk`, `orjson`) via Astral's `uv` runner without requiring local virtualenv creation in target project directories.
+3. **Zero-Config Virtualenv (`uv_python.sh`):** Runs the Promptfoo Python worker in the harness environment synchronized from `pyproject.toml` and `uv.lock`, without creating a virtualenv in the target project. See [Python Runtime Bootstrap](#22-python-runtime-bootstrap-uv_pythonsh).
 
 ---
 
